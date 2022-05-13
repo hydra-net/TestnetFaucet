@@ -1,0 +1,29 @@
+# discord bot token
+token = ""
+
+# websocket eth provider
+eth_provider = "wss://rinkeby.infura.io/ws/v3/....."
+
+# eth wallet
+eth_privkey = ""
+eth_address = ""
+
+# btc REST https://host:port
+btc_url = "https://127.0.0.1:8080"
+# btc admin.macaroon directory
+btc_macaroon_dir = "path_to/admin.macaroon"
+
+# ltc REST https://host:port
+ltc_url = "https://127.0.0.1:8081"
+# ltc admin.macaroon directory
+ltc_macaroon_dir = "path_to/admin.macaroon"
+
+# limit in hours
+limit = 24
+
+[coins]
+BTC = { amount = 0.0001 }
+LTC = { amount = 0.0001 }
+ETH = { amount = 0.0001 }
+USDT = { amount = 0.0001, contract = "0xD92E713d051C37EbB2561803a3b5FBAbc4962431", decimals = 6 }
+USDC = { amount = 0.0001, contract = "0x4DBCdF9B62e891a7cec5A2568C3F4FAF9E8Abe2b", decimals = 6 }
