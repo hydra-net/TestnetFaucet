@@ -50,11 +50,14 @@ pub async fn lnd_send(
         match serde_json::from_str::<lightning_structs::SendCoinsResponse>(&response_message) {
             Ok(message) => message,
             Err(_) => {
+                println!("{}", response_message);
                 let err_message: String;
                 if response_message.contains("not valid for this network") {
                     err_message = "Address not valid for this network!".to_string();
                 } else if response_message.contains("address") {
                     err_message = "Address not valid!".to_string();
+                } else if response_message.contains("insufficient") {
+                    err_message = "Insufficient funds!".to_string();
                 } else {
                     err_message = "Couldn't send onchain coins!".to_string();
                 }
