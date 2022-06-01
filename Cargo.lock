@@ -1695,6 +1695,7 @@ dependencies = [
  "serde-aux",
  "serde_json",
  "serenity",
+ "thiserror",
  "tokio",
  "web3",
 ]

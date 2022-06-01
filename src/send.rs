@@ -1,3 +1,5 @@
+use crate::errors::Error;
+
 use super::lightning_structs;
 use super::structs::Coin;
 use super::utils::btc_to_sat;
@@ -16,7 +18,7 @@ pub async fn lnd_send(
     macaroon: String,
     address: String,
     amount: f64,
-) -> Result<String, String> {
+) -> Result<String, Error> {
     let request = lightning_structs::SendCoinsRequest {
         addr: address,
         amount: btc_to_sat(amount, 8) as i64,
@@ -32,36 +34,28 @@ pub async fn lnd_send(
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .default_headers(headers)
-        .build()
-        .unwrap();
+        .build()?;
 
-    let body = serde_json::to_string(&request).unwrap();
+    let body = serde_json::to_string(&request)?;
 
-    let response = match client.post(&url).body(body).send().await {
-        Ok(response) => response,
-        Err(error) => {
-            return Err(error.to_string());
-        }
-    };
+    let response = client.post(&url).body(body).send().await?;
 
-    let response_message = response.text().await.unwrap();
+    let response_message = response.text().await?;
 
     let message =
         match serde_json::from_str::<lightning_structs::SendCoinsResponse>(&response_message) {
             Ok(message) => message,
             Err(_) => {
                 println!("{}", response_message);
-                let err_message: String;
                 if response_message.contains("not valid for this network") {
-                    err_message = "Address not valid for this network!".to_string();
+                    return Err(Error::InvalidAddress);
                 } else if response_message.contains("address") {
-                    err_message = "Address not valid!".to_string();
+                    return Err(Error::InvalidAddress);
                 } else if response_message.contains("insufficient") {
-                    err_message = "Insufficient funds!".to_string();
+                    return Err(Error::NoFunds);
                 } else {
-                    err_message = "Couldn't send onchain coins!".to_string();
+                    return Err(Error::GenericError(response_message));
                 }
-                return Err(err_message);
             }
         };
 
@@ -74,23 +68,21 @@ pub async fn eth_send_transaction(
     evm_privkey: String,
     address: String,
     amount: f64,
-) -> Result<String, String> {
+) -> Result<String, Error> {
     let to_address: Address;
 
     match Address::from_str(&address) {
         Ok(addr) => to_address = addr,
-        Err(_) => {
-            return Err("Invalid address!".to_string());
-        }
+        Err(_) => return Err(Error::InvalidAddress),
     }
 
     let websocket = match web3::transports::WebSocket::new(&provider).await {
         Ok(websocket) => websocket,
         Err(error) => {
-            return Err(format!(
+            return Err(Error::GenericError(format!(
                 "Couldn't connect to the provider!\nERROR: {:?}",
                 error
-            ));
+            )));
         }
     };
 
@@ -113,9 +105,12 @@ pub async fn eth_send_transaction(
         Ok(gas) => gas,
         Err(error) => {
             if error.to_string().contains("insufficient") {
-                return Err("Insufficient funds!".to_string());
+                return Err(Error::NoFunds);
             } else {
-                return Err(format!("Couldn't estimate gas!\nERROR: {:#}", error));
+                return Err(Error::GenericError(format!(
+                    "Couldn't estimate gas!\nERROR: {:#}",
+                    error
+                )));
             }
         }
     };
@@ -127,14 +122,9 @@ pub async fn eth_send_transaction(
         ..Default::default()
     };
 
-    let prvk = SecretKey::from_str(&evm_privkey.replace("0x", "")).unwrap();
+    let prvk = SecretKey::from_str(&evm_privkey.replace("0x", ""))?;
 
-    let signed_tx = match web3s.accounts().sign_transaction(tx, &prvk).await {
-        Ok(signed_tx) => signed_tx,
-        Err(error) => {
-            return Err(format!("Couldn't sign transaction!\nERROR: {:?}", &error));
-        }
-    };
+    let signed_tx = web3s.accounts().sign_transaction(tx, &prvk).await?;
 
     let txid = match web3s
         .eth()
@@ -144,11 +134,9 @@ pub async fn eth_send_transaction(
         Ok(txid) => "0x".to_string() + &hex::encode(txid.as_bytes().to_vec()),
         Err(error) => {
             if error.to_string().contains("replacement") {
-                return Err(format!(
-                    "Please wait for the previous transaction to be accepted by the blockchain!"
-                ));
+                return Err(Error::PendingTx(error));
             } else {
-                return Err(format!("Couldn't send transaction!\nERROR: {:#}", &error));
+                return Err(Error::Web3Error(error));
             }
         }
     };
@@ -163,25 +151,30 @@ pub async fn erc20_send_transaction(
     evm_privkey: String,
     address: String,
     amount: f64,
-) -> Result<String, String> {
+) -> Result<String, Error> {
     let websocket = match web3::transports::WebSocket::new(&provider).await {
         Ok(websocket) => websocket,
         Err(error) => {
-            return Err(format!(
+            return Err(Error::GenericError(format!(
                 "Couldn't connect to the provider!\nERROR: {:?}",
                 error
-            ));
+            )));
         }
     };
 
     let web3s = web3::Web3::new(websocket);
 
-    let contract_addr = Address::from_str(&coin.contract).unwrap();
+    let contract_addr = match Address::from_str(&coin.contract) {
+        Ok(address) => address,
+        Err(_) => {
+            return Err(Error::InvalidAddress);
+        }
+    };
 
     let to_address = match Address::from_str(&address) {
         Ok(address) => address,
         Err(_) => {
-            return Err("Invalid address!".to_string());
+            return Err(Error::InvalidAddress);
         }
     };
 
@@ -193,7 +186,7 @@ pub async fn erc20_send_transaction(
     ]) {
         Ok(data) => Bytes::from(data),
         Err(error) => {
-            return Err(format!("Couldn't encode ABI\nERROR: {:?}", error));
+            return Err(Error::AbiError(error));
         }
     };
 
@@ -214,9 +207,12 @@ pub async fn erc20_send_transaction(
         Ok(gas) => gas,
         Err(error) => {
             if error.to_string().contains("insufficient") {
-                return Err("Insufficient funds!".to_string());
+                return Err(Error::NoFunds);
             } else {
-                return Err(format!("Couldn't estimate gas!\nERROR: {:?}", error));
+                return Err(Error::GenericError(format!(
+                    "Couldn't estimate gas!\nERROR: {:#}",
+                    error
+                )));
             }
         }
     };
@@ -228,14 +224,9 @@ pub async fn erc20_send_transaction(
         ..Default::default()
     };
 
-    let prvk = SecretKey::from_str(&evm_privkey.replace("0x", "")).unwrap();
+    let prvk = SecretKey::from_str(&evm_privkey.replace("0x", ""))?;
 
-    let signed_tx = match web3s.accounts().sign_transaction(tx, &prvk).await {
-        Ok(signed_tx) => signed_tx,
-        Err(error) => {
-            return Err(format!("Couldn't sign transaction!\nERROR: {:?}", error));
-        }
-    };
+    let signed_tx = web3s.accounts().sign_transaction(tx, &prvk).await?;
 
     let txid = match web3s
         .eth()
@@ -245,11 +236,9 @@ pub async fn erc20_send_transaction(
         Ok(txid) => "0x".to_string() + &hex::encode(txid.as_bytes().to_vec()),
         Err(error) => {
             if error.to_string().contains("replacement") {
-                return Err(format!(
-                    "Please wait for the previous transaction to be accepted by the blockchain!"
-                ));
+                return Err(Error::PendingTx(error));
             } else {
-                return Err(format!("Couldn't send transaction!\nERROR: {:#}", &error));
+                return Err(Error::Web3Error(error));
             }
         }
     };

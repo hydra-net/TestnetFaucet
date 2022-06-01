@@ -1,4 +1,5 @@
 mod erc20_abi;
+mod errors;
 mod lightning_structs;
 mod send;
 mod structs;
@@ -46,8 +47,6 @@ impl EventHandler for Handler {
                 let response_msg: String;
 
                 if let Some(coin_config) = config.coins.get(&coin) {
-                    // TODO: validate address
-
                     let mut cache = CACHE.lock().await;
 
                     let mut user = match cache.get(&msg.author.id.0) {
@@ -67,8 +66,6 @@ impl EventHandler for Handler {
 
                     // check if enough hours had elapsed from last request
                     if current_timestamp > coin_timestamp + config.limit * 3600 {
-                        // TODO: send coins
-
                         let tx_res = match coin.as_str() {
                             "BTC" => {
                                 lnd_send(
@@ -139,7 +136,12 @@ impl EventHandler for Handler {
                             }
                             Err(error) => {
                                 println!("{}", error);
-                                response_msg = error;
+                                response_msg = match error {
+                                    errors::Error::InvalidAddress => String::from("Invalid address!"),
+                                    errors::Error::NoFunds => String::from("Faucet out of funds!"),
+                                    errors::Error::PendingTx(_) => String::from("Another transaction is still pending, retry in some minutes!"),
+                                    _ => String::from("Transaction failed, retry later!"),
+                                };
                             }
                         }
                     } else {
