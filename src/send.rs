@@ -14,14 +14,15 @@ use web3::types::CallRequest;
 use web3::types::TransactionParameters;
 
 pub async fn lnd_send(
-    url: &String,
-    macaroon: String,
-    address: String,
+    coin: &Coin,
+    url: &str,
+    macaroon: &str,
+    address: &str,
     amount: f64,
 ) -> Result<String, Error> {
     let request = lightning_structs::SendCoinsRequest {
-        addr: address,
-        amount: btc_to_sat(amount, 8) as i64,
+        addr: address.to_string(),
+        amount: btc_to_sat(amount, coin.decimals) as i64,
         ..Default::default()
     };
 
@@ -63,10 +64,11 @@ pub async fn lnd_send(
 }
 
 pub async fn eth_send_transaction(
-    provider: String,
+    coin: &Coin,
+    provider: &str,
     evm_address: Address,
-    evm_privkey: String,
-    address: String,
+    evm_privkey: &str,
+    address: &str,
     amount: f64,
 ) -> Result<String, Error> {
     let to_address: Address;
@@ -93,7 +95,7 @@ pub async fn eth_send_transaction(
         to: Some(to_address),
         gas: None,
         gas_price: None,
-        value: Some(eth_to_wei(amount, 18)),
+        value: Some(eth_to_wei(amount, coin.decimals)),
         data: None,
         transaction_type: None,
         access_list: None,
@@ -118,7 +120,7 @@ pub async fn eth_send_transaction(
     let tx = TransactionParameters {
         to: Some(to_address),
         gas: gas,
-        value: eth_to_wei(amount, 18),
+        value: eth_to_wei(amount, coin.decimals),
         ..Default::default()
     };
 
@@ -145,11 +147,11 @@ pub async fn eth_send_transaction(
 }
 
 pub async fn erc20_send_transaction(
-    coin: Coin,
-    provider: String,
+    coin: &Coin,
+    provider: &str,
     evm_address: Address,
-    evm_privkey: String,
-    address: String,
+    evm_privkey: &str,
+    address: &str,
     amount: f64,
 ) -> Result<String, Error> {
     let websocket = match web3::transports::WebSocket::new(&provider).await {

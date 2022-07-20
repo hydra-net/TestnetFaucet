@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
+use structs::Network;
 use structs::{Cache, Config, Macaroon};
 use web3::ethabi::Address;
 
@@ -39,14 +40,14 @@ impl EventHandler for Handler {
             let coin_address: Vec<&str> = msg.content.split("-").collect();
 
             if coin_address.len() == 2 {
-                let coin = coin_address[0].replace(" ", "").to_uppercase(); // allow spaces and lowercase coin
+                let coin_name = coin_address[0].replace(" ", "").to_uppercase(); // allow spaces and lowercase coin
                 let address = coin_address[1].replace(" ", "");
 
                 let config = CONFIG.lock().await;
 
                 let response_msg: String;
 
-                if let Some(coin_config) = config.coins.get(&coin) {
+                if let Some(coin) = config.coins.get(&coin_name) {
                     let mut cache = CACHE.lock().await;
 
                     let mut user = match cache.get(&msg.author.id.0) {
@@ -54,7 +55,7 @@ impl EventHandler for Handler {
                         None => HashMap::new(),
                     };
 
-                    let coin_timestamp = match user.get(&coin) {
+                    let coin_timestamp = match user.get(&coin_name) {
                         Some(timestamp) => timestamp.to_owned(),
                         None => 0,
                     };
@@ -66,73 +67,105 @@ impl EventHandler for Handler {
 
                     // check if enough hours had elapsed from last request
                     if current_timestamp > coin_timestamp + config.limit * 3600 {
-                        let tx_res = match coin.as_str() {
-                            "BTC" => {
-                                lnd_send(
-                                    &config.btc_url,
-                                    MACAROONS.lock().await.btc.to_owned(),
-                                    address,
-                                    coin_config.amount,
-                                )
-                                .await
+                        let tx_res = match coin.network {
+                            Network::Lightning => {
+                                let (url, macaroon) = match coin_name.as_str() {
+                                    "BTC" => (
+                                        config.btc_url.to_owned(),
+                                        MACAROONS.lock().await.btc.to_owned(),
+                                    ),
+                                    "LTC" => (
+                                        config.ltc_url.to_owned(),
+                                        MACAROONS.lock().await.ltc.to_owned(),
+                                    ),
+                                    _ => {
+                                        return;
+                                    }
+                                };
+
+                                lnd_send(&coin, &url, &macaroon, &address, coin.amount).await
                             }
-                            "LTC" => {
-                                lnd_send(
-                                    &config.ltc_url,
-                                    MACAROONS.lock().await.ltc.to_owned(),
-                                    address,
-                                    coin_config.amount,
-                                )
-                                .await
-                            }
-                            "ETH" => {
-                                eth_send_transaction(
-                                    config.eth_provider.to_owned(),
-                                    Address::from_str(&config.eth_address).unwrap(),
-                                    config.eth_privkey.to_owned(),
-                                    address,
-                                    coin_config.amount,
-                                )
-                                .await
-                            }
-                            _ => {
-                                erc20_send_transaction(
-                                    coin_config.to_owned(),
-                                    config.eth_provider.to_owned(),
-                                    Address::from_str(&config.eth_address).unwrap(),
-                                    config.eth_privkey.to_owned(),
-                                    address,
-                                    coin_config.amount,
-                                )
-                                .await
-                            }
+                            Network::Ethereum => match coin_name.as_str() {
+                                "ETH" => {
+                                    eth_send_transaction(
+                                        &coin,
+                                        config.providers.get(&coin.network.to_string()).unwrap(),
+                                        Address::from_str(&config.eth_address).unwrap(),
+                                        &config.eth_privkey,
+                                        &address,
+                                        coin.amount,
+                                    )
+                                    .await
+                                }
+                                _ => {
+                                    erc20_send_transaction(
+                                        &coin,
+                                        config.providers.get(&coin.network.to_string()).unwrap(),
+                                        Address::from_str(&config.eth_address).unwrap(),
+                                        &config.eth_privkey,
+                                        &address,
+                                        coin.amount,
+                                    )
+                                    .await
+                                }
+                            },
+                            Network::Arbitrum => match coin_name.as_str() {
+                                "AETH" => {
+                                    eth_send_transaction(
+                                        &coin,
+                                        config.providers.get(&coin.network.to_string()).unwrap(),
+                                        Address::from_str(&config.eth_address).unwrap(),
+                                        &config.eth_privkey,
+                                        &address,
+                                        coin.amount,
+                                    )
+                                    .await
+                                }
+                                _ => {
+                                    erc20_send_transaction(
+                                        &coin,
+                                        config.providers.get(&coin.network.to_string()).unwrap(),
+                                        Address::from_str(&config.eth_address).unwrap(),
+                                        &config.eth_privkey,
+                                        &address,
+                                        coin.amount,
+                                    )
+                                    .await
+                                }
+                            },
                         };
 
                         match tx_res {
                             Ok(txid) => {
-                                user.insert(coin.to_owned(), current_timestamp);
+                                user.insert(coin_name.to_owned(), current_timestamp);
                                 let mut new_cache = HashMap::new();
                                 new_cache.insert(msg.author.id.0, user);
                                 *cache = new_cache;
 
-                                let explorer = match coin.as_str() {
-                                    "BTC" => {
-                                        format!(
+                                let explorer = match coin.network {
+                                    Network::Lightning => match coin_name.as_str() {
+                                        "BTC" => format!(
                                             "https://www.blockchain.com/btc-testnet/tx/{}",
                                             txid
-                                        )
-                                    }
-                                    "LTC" => {
-                                        format!(
+                                        ),
+                                        "LTC" => format!(
                                             "https://blockexplorer.one/litecoin/testnet/tx/{}",
                                             txid
-                                        )
+                                        ),
+                                        _ => {
+                                            return;
+                                        }
+                                    },
+                                    Network::Ethereum => {
+                                        format!("https://rinkeby.etherscan.io/tx/{}", txid)
                                     }
-                                    _ => format!("https://rinkeby.etherscan.io/tx/{}", txid),
+                                    Network::Arbitrum => {
+                                        format!("https://testnet.arbiscan.io/tx/{}", txid)
+                                    }
                                 };
 
                                 response_msg =
-                                    format!("Sent {} {}! {}", coin_config.amount, coin, explorer);
+                                    format!("Sent {} {}! {}", coin.amount, coin_name, explorer);
                             }
                             Err(error) => {
                                 println!("{}", error);
@@ -150,7 +183,7 @@ impl EventHandler for Handler {
                         let mins = (remaining - hours * 3600) / 60;
                         response_msg = format!(
                             "Please wait another {}h{}m before requesting new {}!",
-                            hours, mins, coin
+                            hours, mins, coin_name
                         );
                     }
                 } else {
