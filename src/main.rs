@@ -157,10 +157,13 @@ impl EventHandler for Handler {
                                         }
                                     },
                                     Network::Ethereum => {
-                                        format!("https://rinkeby.etherscan.io/tx/{}", txid)
+                                        format!("https://goerli.etherscan.io/tx/{}", txid)
                                     }
                                     Network::Arbitrum => {
-                                        format!("https://testnet.arbiscan.io/tx/{}", txid)
+                                        format!(
+                                            "https://goerli-rollup-explorer.arbitrum.io/tx/{}",
+                                            txid
+                                        )
                                     }
                                 };
 
