@@ -37,11 +37,11 @@ lazy_static! {
 impl EventHandler for Handler {
     async fn message(&self, context: Context, msg: Message) {
         if !msg.author.bot {
-            let coin_address: Vec<&str> = msg.content.split("-").collect();
+            let coin_address: Vec<&str> = msg.content.split('-').collect();
 
             if coin_address.len() == 2 {
-                let coin_name = coin_address[0].replace(" ", "").to_uppercase(); // allow spaces and lowercase coin
-                let address = coin_address[1].replace(" ", "");
+                let coin_name = coin_address[0].replace(' ', "").to_uppercase(); // allow spaces and lowercase coin
+                let address = coin_address[1].replace(' ', "");
 
                 let config = CONFIG.lock().await;
 
@@ -50,13 +50,11 @@ impl EventHandler for Handler {
                 if let Some(coin) = config.coins.get(&coin_name) {
                     let mut cache = CACHE.lock().await;
 
-                    let mut user = match cache.get(&msg.author.id.0) {
-                        Some(user) => user.to_owned(),
-                        None => HashMap::new(),
-                    };
-
-                    let coin_timestamp = match user.get(&coin_name) {
-                        Some(timestamp) => timestamp.to_owned(),
+                    let coin_timestamp = match cache.get(&msg.author.id) {
+                        Some(user) => match user.get(&coin_name) {
+                            Some(timestamp) => timestamp.to_owned(),
+                            None => 0,
+                        },
                         None => 0,
                     };
 
@@ -83,12 +81,12 @@ impl EventHandler for Handler {
                                     }
                                 };
 
-                                lnd_send(&coin, &url, &macaroon, &address, coin.amount).await
+                                lnd_send(coin, &url, &macaroon, &address, coin.amount).await
                             }
                             Network::Ethereum => match coin_name.as_str() {
                                 "ETH" => {
                                     eth_send_transaction(
-                                        &coin,
+                                        coin,
                                         config.providers.get(&coin.network.to_string()).unwrap(),
                                         Address::from_str(&config.eth_address).unwrap(),
                                         &config.eth_privkey,
@@ -99,7 +97,7 @@ impl EventHandler for Handler {
                                 }
                                 _ => {
                                     erc20_send_transaction(
-                                        &coin,
+                                        coin,
                                         config.providers.get(&coin.network.to_string()).unwrap(),
                                         Address::from_str(&config.eth_address).unwrap(),
                                         &config.eth_privkey,
@@ -112,7 +110,7 @@ impl EventHandler for Handler {
                             Network::Arbitrum => match coin_name.as_str() {
                                 "AETH" => {
                                     eth_send_transaction(
-                                        &coin,
+                                        coin,
                                         config.providers.get(&coin.network.to_string()).unwrap(),
                                         Address::from_str(&config.eth_address).unwrap(),
                                         &config.eth_privkey,
@@ -123,7 +121,7 @@ impl EventHandler for Handler {
                                 }
                                 _ => {
                                     erc20_send_transaction(
-                                        &coin,
+                                        coin,
                                         config.providers.get(&coin.network.to_string()).unwrap(),
                                         Address::from_str(&config.eth_address).unwrap(),
                                         &config.eth_privkey,
@@ -137,10 +135,16 @@ impl EventHandler for Handler {
 
                         match tx_res {
                             Ok(txid) => {
-                                user.insert(coin_name.to_owned(), current_timestamp);
-                                let mut new_cache = HashMap::new();
-                                new_cache.insert(msg.author.id.0, user);
-                                *cache = new_cache;
+                                match cache.get_mut(&msg.author.id) {
+                                    Some(user) => {
+                                        user.insert(coin_name.to_owned(), current_timestamp);
+                                    }
+                                    None => {
+                                        let mut user = HashMap::new();
+                                        user.insert(coin_name.to_owned(), current_timestamp);
+                                        cache.insert(msg.author.id, user);
+                                    }
+                                }
 
                                 let explorer = match coin.network {
                                     Network::Lightning => match coin_name.as_str() {

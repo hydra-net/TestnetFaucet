@@ -48,19 +48,19 @@ pub async fn lnd_send(
             Ok(message) => message,
             Err(_) => {
                 println!("{}", response_message);
-                if response_message.contains("not valid for this network") {
-                    return Err(Error::InvalidAddress);
-                } else if response_message.contains("address") {
+                if response_message.contains("not valid for this network")
+                    || response_message.contains("address")
+                {
                     return Err(Error::InvalidAddress);
                 } else if response_message.contains("insufficient") {
                     return Err(Error::NoFunds);
                 } else {
-                    return Err(Error::GenericError(response_message));
+                    return Err(Error::Generic(response_message));
                 }
             }
         };
 
-    return Ok(message.txid);
+    Ok(message.txid)
 }
 
 pub async fn eth_send_transaction(
@@ -71,17 +71,15 @@ pub async fn eth_send_transaction(
     address: &str,
     amount: f64,
 ) -> Result<String, Error> {
-    let to_address: Address;
-
-    match Address::from_str(&address) {
-        Ok(addr) => to_address = addr,
+    let to_address = match Address::from_str(address) {
+        Ok(addr) => addr,
         Err(_) => return Err(Error::InvalidAddress),
-    }
+    };
 
-    let websocket = match web3::transports::WebSocket::new(&provider).await {
+    let websocket = match web3::transports::WebSocket::new(provider).await {
         Ok(websocket) => websocket,
         Err(error) => {
-            return Err(Error::GenericError(format!(
+            return Err(Error::Generic(format!(
                 "Couldn't connect to the provider!\nERROR: {:?}",
                 error
             )));
@@ -109,7 +107,7 @@ pub async fn eth_send_transaction(
             if error.to_string().contains("insufficient") {
                 return Err(Error::NoFunds);
             } else {
-                return Err(Error::GenericError(format!(
+                return Err(Error::Generic(format!(
                     "Couldn't estimate gas!\nERROR: {:#}",
                     error
                 )));
@@ -119,7 +117,7 @@ pub async fn eth_send_transaction(
 
     let tx = TransactionParameters {
         to: Some(to_address),
-        gas: gas,
+        gas,
         value: eth_to_wei(amount, coin.decimals),
         ..Default::default()
     };
@@ -133,17 +131,17 @@ pub async fn eth_send_transaction(
         .send_raw_transaction(signed_tx.raw_transaction)
         .await
     {
-        Ok(txid) => "0x".to_string() + &hex::encode(txid.as_bytes().to_vec()),
+        Ok(txid) => "0x".to_string() + &hex::encode(txid.as_bytes()),
         Err(error) => {
             if error.to_string().contains("replacement") {
                 return Err(Error::PendingTx(error));
             } else {
-                return Err(Error::Web3Error(error));
+                return Err(Error::Web3(error));
             }
         }
     };
 
-    return Ok(txid);
+    Ok(txid)
 }
 
 pub async fn erc20_send_transaction(
@@ -154,10 +152,10 @@ pub async fn erc20_send_transaction(
     address: &str,
     amount: f64,
 ) -> Result<String, Error> {
-    let websocket = match web3::transports::WebSocket::new(&provider).await {
+    let websocket = match web3::transports::WebSocket::new(provider).await {
         Ok(websocket) => websocket,
         Err(error) => {
-            return Err(Error::GenericError(format!(
+            return Err(Error::Generic(format!(
                 "Couldn't connect to the provider!\nERROR: {:?}",
                 error
             )));
@@ -173,7 +171,7 @@ pub async fn erc20_send_transaction(
         }
     };
 
-    let to_address = match Address::from_str(&address) {
+    let to_address = match Address::from_str(address) {
         Ok(address) => address,
         Err(_) => {
             return Err(Error::InvalidAddress);
@@ -188,7 +186,7 @@ pub async fn erc20_send_transaction(
     ]) {
         Ok(data) => Bytes::from(data),
         Err(error) => {
-            return Err(Error::AbiError(error));
+            return Err(Error::Abi(error));
         }
     };
 
@@ -211,7 +209,7 @@ pub async fn erc20_send_transaction(
             if error.to_string().contains("insufficient") {
                 return Err(Error::NoFunds);
             } else {
-                return Err(Error::GenericError(format!(
+                return Err(Error::Generic(format!(
                     "Couldn't estimate gas!\nERROR: {:#}",
                     error
                 )));
@@ -221,8 +219,8 @@ pub async fn erc20_send_transaction(
 
     let tx = TransactionParameters {
         to: Some(contract_addr),
-        data: data,
-        gas: gas,
+        data,
+        gas,
         ..Default::default()
     };
 
@@ -235,12 +233,12 @@ pub async fn erc20_send_transaction(
         .send_raw_transaction(signed_tx.raw_transaction)
         .await
     {
-        Ok(txid) => "0x".to_string() + &hex::encode(txid.as_bytes().to_vec()),
+        Ok(txid) => "0x".to_string() + &hex::encode(txid.as_bytes()),
         Err(error) => {
             if error.to_string().contains("replacement") {
                 return Err(Error::PendingTx(error));
             } else {
-                return Err(Error::Web3Error(error));
+                return Err(Error::Web3(error));
             }
         }
     };

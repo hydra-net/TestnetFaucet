@@ -22,13 +22,11 @@ pub fn transfer() -> Function {
         internal_type: None,
     };
 
-    let transfer_function = Function {
+    Function {
         name: "transfer".to_string(),
         inputs: vec![input_address, input_amount],
         outputs: vec![output],
         constant: false,
         state_mutability: StateMutability::NonPayable,
-    };
-
-    return transfer_function;
+    }
 }

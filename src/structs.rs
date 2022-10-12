@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use serenity::model::prelude::UserId;
 use std::collections::HashMap;
 
 #[derive(Default, Clone, Deserialize)]
@@ -49,4 +50,4 @@ pub struct Macaroon {
     pub ltc: String,
 }
 
-pub type Cache = HashMap<u64, HashMap<String, u64>>; // user_id -> coin -> timestamp
+pub type Cache = HashMap<UserId, HashMap<String, u64>>; // user_id -> coin -> timestamp
