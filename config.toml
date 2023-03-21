@@ -2,8 +2,7 @@
 token = ""
 
 # eth wallet
-eth_privkey = ""
-eth_address = ""
+eth_mnemonic = ""
 
 # btc REST https://host:port
 btc_url = "https://127.0.0.1:8080"

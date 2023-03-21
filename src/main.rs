@@ -1,17 +1,15 @@
-mod erc20_abi;
 mod errors;
+mod ierc20;
+mod json_rpc;
 mod lightning_structs;
 mod send;
 mod structs;
 mod utils;
 
-#[macro_use]
-extern crate lazy_static;
-
 use config_file::FromConfigFile;
-use send::erc20_send_transaction;
-use send::eth_send_transaction;
-use send::lnd_send;
+use ethers::signers::coins_bip39::English;
+use ethers::signers::LocalWallet;
+use ethers::signers::MnemonicBuilder;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
@@ -19,22 +17,20 @@ use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
+use structs::Coin;
 use structs::Network;
 use structs::{Cache, Config, Macaroon};
-use web3::ethabi::Address;
 
-struct Handler;
-
-lazy_static! {
-    static ref CACHE: Mutex<Cache> = Mutex::new(HashMap::new());
-    static ref CONFIG: Mutex<Config> = Mutex::new(Config::default());
-    static ref MACAROONS: Mutex<Macaroon> = Mutex::new(Macaroon::default());
+struct Faucet {
+    config: Config,
+    cache: Mutex<Cache>,
+    macaroon: Macaroon,
+    eth_wallet: LocalWallet,
 }
 
 #[async_trait]
-impl EventHandler for Handler {
+impl EventHandler for Faucet {
     async fn message(&self, context: Context, msg: Message) {
         if !msg.author.bot {
             let coin_address: Vec<&str> = msg.content.split('-').collect();
@@ -43,12 +39,18 @@ impl EventHandler for Handler {
                 let coin_name = coin_address[0].replace(' ', "").to_uppercase(); // allow spaces and lowercase coin
                 let address = coin_address[1].replace(' ', "");
 
-                let config = CONFIG.lock().await;
-
                 let response_msg: String;
 
-                if let Some(coin) = config.coins.get(&coin_name) {
-                    let mut cache = CACHE.lock().await;
+                if let Some(config_coin) = self.config.coins.get(&coin_name) {
+                    let coin = Coin {
+                        name: coin_name.to_owned(),
+                        amount: config_coin.amount,
+                        decimals: config_coin.decimals,
+                        contract: config_coin.contract.to_owned(),
+                        network: config_coin.network.to_owned(),
+                    };
+
+                    let mut cache = self.cache.lock().await;
 
                     let coin_timestamp = match cache.get(&msg.author.id) {
                         Some(user) => match user.get(&coin_name) {
@@ -64,71 +66,27 @@ impl EventHandler for Handler {
                         .as_secs();
 
                     // check if enough hours had elapsed from last request
-                    if current_timestamp > coin_timestamp + config.limit * 3600 {
+                    if current_timestamp > coin_timestamp + self.config.limit * 3600 {
                         let tx_res = match coin.network {
-                            Network::Lightning => {
-                                let (url, macaroon) = match coin_name.as_str() {
-                                    "BTC" => (
-                                        config.btc_url.to_owned(),
-                                        MACAROONS.lock().await.btc.to_owned(),
-                                    ),
-                                    "LTC" => (
-                                        config.ltc_url.to_owned(),
-                                        MACAROONS.lock().await.ltc.to_owned(),
-                                    ),
-                                    _ => {
-                                        return;
-                                    }
-                                };
-
-                                lnd_send(coin, &url, &macaroon, &address, coin.amount).await
-                            }
+                            Network::Lightning => self.lnd_send(&coin, &address, coin.amount).await,
                             Network::Ethereum => match coin_name.as_str() {
                                 "ETH" => {
-                                    eth_send_transaction(
-                                        coin,
-                                        config.providers.get(&coin.network.to_string()).unwrap(),
-                                        Address::from_str(&config.eth_address).unwrap(),
-                                        &config.eth_privkey,
-                                        &address,
-                                        coin.amount,
-                                    )
-                                    .await
+                                    self.eth_send_transaction(&coin, &address, coin.amount)
+                                        .await
                                 }
                                 _ => {
-                                    erc20_send_transaction(
-                                        coin,
-                                        config.providers.get(&coin.network.to_string()).unwrap(),
-                                        Address::from_str(&config.eth_address).unwrap(),
-                                        &config.eth_privkey,
-                                        &address,
-                                        coin.amount,
-                                    )
-                                    .await
+                                    self.erc20_send_transaction(&coin, &address, coin.amount)
+                                        .await
                                 }
                             },
                             Network::Arbitrum => match coin_name.as_str() {
                                 "AETH" => {
-                                    eth_send_transaction(
-                                        coin,
-                                        config.providers.get(&coin.network.to_string()).unwrap(),
-                                        Address::from_str(&config.eth_address).unwrap(),
-                                        &config.eth_privkey,
-                                        &address,
-                                        coin.amount,
-                                    )
-                                    .await
+                                    self.eth_send_transaction(&coin, &address, coin.amount)
+                                        .await
                                 }
                                 _ => {
-                                    erc20_send_transaction(
-                                        coin,
-                                        config.providers.get(&coin.network.to_string()).unwrap(),
-                                        Address::from_str(&config.eth_address).unwrap(),
-                                        &config.eth_privkey,
-                                        &address,
-                                        coin.amount,
-                                    )
-                                    .await
+                                    self.erc20_send_transaction(&coin, &address, coin.amount)
+                                        .await
                                 }
                             },
                         };
@@ -177,15 +135,26 @@ impl EventHandler for Handler {
                             Err(error) => {
                                 println!("{}", error);
                                 response_msg = match error {
-                                    errors::Error::InvalidAddress => String::from("Invalid address!"),
+                                    errors::Error::InvalidAddress => {
+                                        String::from("Invalid address!")
+                                    }
                                     errors::Error::NoFunds => String::from("Faucet out of funds!"),
-                                    errors::Error::PendingTx(_) => String::from("Another transaction is still pending, retry in some minutes!"),
-                                    _ => String::from("Transaction failed, retry later!"),
+                                    _ => {
+                                        if error
+                                            .to_string()
+                                            .contains("replacement transaction underpriced")
+                                        {
+                                            String::from("Please wait for the previous transaction to be confirmed!")
+                                        } else {
+                                            String::from("Transaction failed, retry later!")
+                                        }
+                                    }
                                 };
                             }
                         }
                     } else {
-                        let remaining = coin_timestamp + config.limit * 3600 - current_timestamp;
+                        let remaining =
+                            coin_timestamp + self.config.limit * 3600 - current_timestamp;
                         let hours = remaining / 3600;
                         let mins = (remaining - hours * 3600) / 60;
                         response_msg = format!(
@@ -219,8 +188,6 @@ async fn main() {
     let config =
         Config::from_config_file("config.toml").expect("config.toml not properly formatted");
 
-    *CONFIG.lock().await = config.to_owned();
-
     let btc_macaroon = match std::fs::read(PathBuf::from(&config.btc_macaroon_dir)) {
         Ok(macaroon) => hex::encode(macaroon),
         Err(error) => {
@@ -235,17 +202,27 @@ async fn main() {
         }
     };
 
-    let macaroons = Macaroon {
+    let macaroon = Macaroon {
         btc: btc_macaroon,
         ltc: ltc_macaroon,
     };
 
-    *MACAROONS.lock().await = macaroons;
+    let eth_wallet = MnemonicBuilder::<English>::default()
+        .phrase(&*config.eth_mnemonic)
+        .build()
+        .unwrap();
+
+    let faucet = Faucet {
+        config: config.clone(),
+        cache: Mutex::new(HashMap::new()),
+        macaroon,
+        eth_wallet,
+    };
 
     let intents =
         GatewayIntents::GUILD_MESSAGES | GatewayIntents::GUILDS | GatewayIntents::MESSAGE_CONTENT;
     let mut client = Client::builder(&config.token, intents)
-        .event_handler(Handler)
+        .event_handler(faucet)
         .await
         .expect("Err creating client");
 

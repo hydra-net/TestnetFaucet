@@ -1,6 +1,6 @@
-use web3::types::U256;
+use ethers::types::U256;
 
-pub fn wei_to_eth(amount: U256, decimals: u32) -> f64 {
+pub fn _wei_to_eth(amount: U256, decimals: u32) -> f64 {
     amount.as_u128() as f64 / 10_f64.powf(decimals as f64)
 }
 
@@ -13,7 +13,7 @@ pub fn eth_to_wei(amount: f64, decimals: u32) -> U256 {
     }
 }
 
-pub fn sat_to_btc(amount: i64, decimals: u32) -> f64 {
+pub fn _sat_to_btc(amount: i64, decimals: u32) -> f64 {
     let res = amount as f64 / 10_f64.powf(decimals as f64);
     if res >= 0.0 {
         res
